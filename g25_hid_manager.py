@@ -41,7 +41,16 @@ class G25RawController:
 
     def read_input(self):
         if not self.connect(): return None
-        try: return self.device.read(24)
+        try:
+            latest_data = None
+            while True:
+                # Drains the USB buffer by reading until it's empty
+                data = self.device.read(24)
+                if data:
+                    latest_data = data
+                else:
+                    break # Buffer is empty, we have the newest packet!
+            return latest_data
         except IOError:
             self.disconnect()
             return None
@@ -410,7 +419,7 @@ class RawWheelConfigApp:
             self.status_label.config(text=f"Error: {e}", foreground="red")
 
         finally:
-            self.root.after(30, self.hardware_loop)
+            self.root.after(15, self.hardware_loop)
 
 if __name__ == "__main__":
     root = tk.Tk()
