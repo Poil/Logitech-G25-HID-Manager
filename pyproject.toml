@@ -1,0 +1,22 @@
+[project]
+name = "g25-hid-manager"
+version = "0.1.0"
+description = "G25 HID Manager for Windows 11"
+authors = [
+    {name = "Poil",email = "poil@quake.fr"}
+]
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "hid (>=1.0.9,<2.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pyinstaller (>=6.19.0,<7.0.0)"
+]
