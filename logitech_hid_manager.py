@@ -305,6 +305,32 @@ class RawWheelConfigApp:
         # Give the USB bus 100ms to clear the final commands before killing the window
         self.root.after(100, self.root.destroy)
 
+    def trigger_ffb_test(self):
+        """Simulates a Sidewinder-style FFB test using safe raw commands."""
+        if not self.wheel.device: return
+
+        def _test_sequence():
+            original_center = int(self.centering_var.get())
+
+            # 1. The "Heavy Spring" Test
+            # Turn the wheel slightly with your hands, then click the test button!
+            self.wheel.set_autocenter(100)
+            time.sleep(0.6)
+
+            # 2. The "Rumble Strip" Test
+            # Rapidly pulse the motors on and off to create a vibration
+            for _ in range(8):
+                self.wheel.set_autocenter(0)
+                time.sleep(0.04)
+                self.wheel.set_autocenter(80)
+                time.sleep(0.04)
+
+            # 3. Safely restore the user's slider settings
+            self.wheel.set_autocenter(original_center)
+
+        # Run in a disposable background thread so the GUI doesn't freeze during the time.sleep()
+        threading.Thread(target=_test_sequence, daemon=True).start()
+
     def _hardware_worker(self):
         """Dedicated background thread for USB polling. Never blocks the GUI."""
         last_conn_attempt = 0
@@ -440,6 +466,8 @@ class RawWheelConfigApp:
         self.ffb_frame.pack(fill="x", pady=(0, 10), ipady=5)
         self.centering_var = tk.DoubleVar(value=20)
         self.create_slider_row(self.ffb_frame, "Spring Strength", 0, 100, self.centering_var, "%")
+
+        ttk.Button(self.ffb_frame, text="Test FFB (Rumble & Spring)", command=self.trigger_ffb_test).pack(padx=10, pady=(5, 0), fill="x")
 
         self.wheel_frame = ttk.LabelFrame(self.left_pane, text="Steering Wheel Settings")
         self.wheel_frame.pack(fill="x", pady=(5, 10), ipady=5)
