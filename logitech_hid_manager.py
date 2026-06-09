@@ -106,7 +106,7 @@ class RawWheelConfigApp:
         self.root = root
         self.wheel = wheel
         self.root.title("Logitech Hardware Manager Dashboard")
-        self.root.geometry("850x620") # Slightly taller to fit new buttons
+        self.root.geometry("850x620") 
         self.root.resizable(False, False)
 
         self.debug_window = None
@@ -239,8 +239,8 @@ class RawWheelConfigApp:
         # ROW 0: G25 Wheel
         lbl_w1 = ttk.Label(parent, text="Wheel (G25):", font=("Arial", 9, "bold"))
         lbl_w1.grid(row=0, column=0, pady=2, padx=5, sticky="w")
-        self.btn_indicators["Paddle_L"] = self.make_led(parent, "L-Paddle", 0, 1)
-        self.btn_indicators["Paddle_R"] = self.make_led(parent, "R-Paddle", 0, 2)
+        self.btn_indicators["G25_Paddle_L"] = self.make_led(parent, "L-Paddle", 0, 1)
+        self.btn_indicators["G25_Paddle_R"] = self.make_led(parent, "R-Paddle", 0, 2)
         self.btn_indicators["G25_A"] = self.make_led(parent, "Btn A", 0, 3)
         self.btn_indicators["G25_B"] = self.make_led(parent, "Btn B", 0, 4)
 
@@ -250,12 +250,15 @@ class RawWheelConfigApp:
 
         g27_frame = ttk.Frame(parent)
         g27_frame.grid(row=1, column=1, columnspan=4, sticky="w")
-        self.btn_indicators["G27_1"] = self.make_led(g27_frame, "B1", 0, 0, width=5)
-        self.btn_indicators["G27_2"] = self.make_led(g27_frame, "B2", 0, 1, width=5)
-        self.btn_indicators["G27_3"] = self.make_led(g27_frame, "B3", 0, 2, width=5)
-        self.btn_indicators["G27_4"] = self.make_led(g27_frame, "B4", 0, 3, width=5)
-        self.btn_indicators["G27_5"] = self.make_led(g27_frame, "B5", 0, 4, width=5)
-        self.btn_indicators["G27_6"] = self.make_led(g27_frame, "B6", 0, 5, width=5)
+        
+        self.btn_indicators["G27_Paddle_L"] = self.make_led(g27_frame, "L-Pad", 0, 0, width=5)
+        self.btn_indicators["G27_Paddle_R"] = self.make_led(g27_frame, "R-Pad", 0, 1, width=5)
+        self.btn_indicators["G27_1"] = self.make_led(g27_frame, "B1", 0, 2, width=3)
+        self.btn_indicators["G27_2"] = self.make_led(g27_frame, "B2", 0, 3, width=3)
+        self.btn_indicators["G27_3"] = self.make_led(g27_frame, "B3", 0, 4, width=3)
+        self.btn_indicators["G27_4"] = self.make_led(g27_frame, "B4", 0, 5, width=3)
+        self.btn_indicators["G27_5"] = self.make_led(g27_frame, "B5", 0, 6, width=3)
+        self.btn_indicators["G27_6"] = self.make_led(g27_frame, "B6", 0, 7, width=3)
 
         # ROW 2: Shifter D-Pad
         shifter_lbl = ttk.Label(parent, text="Shifter:", font=("Arial", 9, "bold"))
@@ -397,15 +400,15 @@ class RawWheelConfigApp:
                     if len(data) >= 11:
                         w_btn = data[1]
 
-                        # Shared Paddles
-                        self.set_led("Paddle_L", w_btn & 0x02, True)
-                        self.set_led("Paddle_R", w_btn & 0x01, True)
-
-                        # G25 Only (Disabled on G27)
+                        # --- G25 Buttons & Paddles ---
+                        self.set_led("G25_Paddle_L", w_btn & 0x02, is_g25)
+                        self.set_led("G25_Paddle_R", w_btn & 0x01, is_g25)
                         self.set_led("G25_A", w_btn & 0x08, is_g25)
                         self.set_led("G25_B", w_btn & 0x04, is_g25)
 
-                        # G27 Only (Disabled on G25)
+                        # --- G27 Buttons & Paddles ---
+                        self.set_led("G27_Paddle_L", w_btn & 0x02, is_g27)
+                        self.set_led("G27_Paddle_R", w_btn & 0x01, is_g27)
                         self.set_led("G27_1", w_btn & 0x04, is_g27)
                         self.set_led("G27_2", w_btn & 0x08, is_g27)
                         self.set_led("G27_3", w_btn & 0x10, is_g27)
