@@ -1,6 +1,10 @@
 import hid
 import tkinter as tk
 from tkinter import ttk
+from tkinter import filedialog
+import json
+import os
+import argparse
 
 # USB IDs for Logitech G25 & G27
 VENDOR_ID = 0x046D
@@ -100,20 +104,33 @@ class LogitechRawController:
         mag = int((max(0, min(100, int(strength_percent))) / 100.0) * 65535)
         return self.send_command([0x00, 0xFE, 0x0D, mag >> 13, mag >> 13, mag >> 8, 0x00, 0x00])
 
+    def set_g27_leds(self, num_leds):
+        # Maps 0-5 active LEDs into the hardware bitmask expected by G27 firmware
+        mask = 0
+        if num_leds >= 1: mask |= 0x01
+        if num_leds >= 2: mask |= 0x02
+        if num_leds >= 3: mask |= 0x04
+        if num_leds >= 4: mask |= 0x08
+        if num_leds >= 5: mask |= 0x10
+        return self.send_command([0x00, 0x12, mask, 0x00, 0x00, 0x00, 0x00, 0x00])
+
 
 class RawWheelConfigApp:
-    def __init__(self, root, wheel):
+    def __init__(self, root, wheel, cli_args=None):
         self.root = root
         self.wheel = wheel
+        self.cli_args = cli_args
         self.root.title("Logitech Hardware Manager Dashboard")
-        self.root.geometry("850x620") 
+        self.root.geometry("920x660")
         self.root.resizable(False, False)
 
         self.debug_window = None
         self.debug_labels = []
         self.gear_indicators = {}
         self.btn_indicators = {}
+        self.rpm_indicators = []
         self.dpad_dots = {}
+        self.last_rpm_leds = -1
 
         self.main_frame = ttk.Frame(self.root, padding=10)
         self.main_frame.pack(fill="both", expand=True)
@@ -130,10 +147,33 @@ class RawWheelConfigApp:
         self.status_label = ttk.Label(self.root, text="Checking connection...", font=("Arial", 9, "bold"))
         self.status_label.pack(side="bottom", pady=5)
 
+        # Handle headless window visibility state if executed via --launch CLI
+        if self.cli_args and self.cli_args.launch:
+            self.root.iconify()
+
         self.root.after(500, self.delayed_init)
 
     def delayed_init(self):
+        # Process programmatic Profile configurations first if specified
+        if self.cli_args:
+            if self.cli_args.profile:
+                self.load_profile_from_path(self.cli_args.profile)
+
+            # Direct CLI flags prioritize over conflicting Profile values
+            if self.cli_args.degrees is not None:
+                self.degrees_var.set(self.cli_args.degrees)
+            if self.cli_args.autocenter is not None:
+                self.centering_var.set(self.cli_args.autocenter)
+
         self.apply_settings()
+
+        # Handle URI/Exec target instantiation
+        if self.cli_args and self.cli_args.launch:
+            try:
+                os.startfile(self.cli_args.launch)
+            except Exception as e:
+                print(f"CLI Launcher Error: {e}")
+
         self.hardware_loop()
 
     def setup_left_pane(self):
@@ -158,7 +198,13 @@ class RawWheelConfigApp:
         self.degrees_var = tk.DoubleVar(value=900)
         self.create_slider_row(self.wheel_frame, "Rotation", 40, 900, self.degrees_var, "°")
 
-        ttk.Button(self.left_pane, text="Apply FFB & Rotation", command=self.apply_settings).pack(pady=(10, 0), fill="x")
+        ttk.Button(self.left_pane, text="Apply FFB & Rotation", command=self.apply_settings).pack(pady=(5, 10), fill="x")
+
+        # Profiles Section
+        self.profile_frame = ttk.LabelFrame(self.left_pane, text="Profile Management")
+        self.profile_frame.pack(fill="x", pady=(5, 10), ipady=5)
+        ttk.Button(self.profile_frame, text="Load JSON Profile", command=self.load_profile).pack(padx=10, pady=4, fill="x")
+        ttk.Button(self.profile_frame, text="Save JSON Profile", command=self.save_profile).pack(padx=10, pady=4, fill="x")
 
     def create_slider_row(self, parent, label_text, min_val, max_val, var, unit="%"):
         frame = ttk.Frame(parent)
@@ -236,7 +282,7 @@ class RawWheelConfigApp:
             self.gear_indicators[gear] = circle
 
     def setup_button_indicators(self, parent):
-        # ROW 0: G25 Wheel
+        # ROW 0: G25 Rim Mapping
         lbl_w1 = ttk.Label(parent, text="Wheel (G25):", font=("Arial", 9, "bold"))
         lbl_w1.grid(row=0, column=0, pady=2, padx=5, sticky="w")
         self.btn_indicators["G25_Paddle_L"] = self.make_led(parent, "L-Paddle", 0, 1)
@@ -244,13 +290,13 @@ class RawWheelConfigApp:
         self.btn_indicators["G25_A"] = self.make_led(parent, "Btn A", 0, 3)
         self.btn_indicators["G25_B"] = self.make_led(parent, "Btn B", 0, 4)
 
-        # ROW 1: G27 Wheel
+        # ROW 1: G27 Rim Mapping
         lbl_w2 = ttk.Label(parent, text="Wheel (G27):", font=("Arial", 9, "bold"))
         lbl_w2.grid(row=1, column=0, pady=2, padx=5, sticky="w")
 
         g27_frame = ttk.Frame(parent)
         g27_frame.grid(row=1, column=1, columnspan=4, sticky="w")
-        
+
         self.btn_indicators["G27_Paddle_L"] = self.make_led(g27_frame, "L-Pad", 0, 0, width=5)
         self.btn_indicators["G27_Paddle_R"] = self.make_led(g27_frame, "R-Pad", 0, 1, width=5)
         self.btn_indicators["G27_1"] = self.make_led(g27_frame, "B1", 0, 2, width=3)
@@ -260,28 +306,41 @@ class RawWheelConfigApp:
         self.btn_indicators["G27_5"] = self.make_led(g27_frame, "B5", 0, 6, width=3)
         self.btn_indicators["G27_6"] = self.make_led(g27_frame, "B6", 0, 7, width=3)
 
-        # ROW 2: Shifter D-Pad
+        # ROW 2: G27 RPM LED Mock Arrays
+        lbl_rpm = ttk.Label(parent, text="G27 RPM LEDs:", font=("Arial", 9, "bold"))
+        lbl_rpm.grid(row=2, column=0, pady=2, padx=5, sticky="w")
+
+        rpm_frame = ttk.Frame(parent)
+        rpm_frame.grid(row=2, column=1, columnspan=4, sticky="w")
+        self.rpm_colors_off = ["#1a331a", "#1a331a", "#33261a", "#33261a", "#331a1a"]
+        self.rpm_colors_on = ["#00ff00", "#00ff00", "#ff9900", "#ff9900", "#ff0000"]
+        for i in range(5):
+            lbl = tk.Label(rpm_frame, text="●", fg=self.rpm_colors_off[i], bg="#222", font=("Arial", 12, "bold"), width=3)
+            lbl.pack(side="left", padx=1)
+            self.rpm_indicators.append(lbl)
+
+        # ROW 3: Shifter Buttons
         shifter_lbl = ttk.Label(parent, text="Shifter:", font=("Arial", 9, "bold"))
-        shifter_lbl.grid(row=2, column=0, pady=5, padx=5, sticky="w")
-        self.btn_indicators["Top"] = self.make_led(parent, "Top", 2, 1)
-        self.btn_indicators["Left"] = self.make_led(parent, "Left", 2, 2)
-        self.btn_indicators["Bottom"] = self.make_led(parent, "Bottom", 2, 3)
-        self.btn_indicators["Right"] = self.make_led(parent, "Right", 2, 4)
+        shifter_lbl.grid(row=3, column=0, pady=5, padx=5, sticky="w")
+        self.btn_indicators["Top"] = self.make_led(parent, "Top", 3, 1)
+        self.btn_indicators["Left"] = self.make_led(parent, "Left", 3, 2)
+        self.btn_indicators["Bottom"] = self.make_led(parent, "Bottom", 3, 3)
+        self.btn_indicators["Right"] = self.make_led(parent, "Right", 3, 4)
 
-        # ROW 3: Shifter Red
+        # ROW 4: Base Button Matrix
         red_lbl = ttk.Label(parent, text="Red Row:", font=("Arial", 9, "bold"))
-        red_lbl.grid(row=3, column=0, pady=5, padx=5, sticky="w")
-        self.btn_indicators["Red_1"] = self.make_led(parent, "Red 1", 3, 1)
-        self.btn_indicators["Red_2"] = self.make_led(parent, "Red 2", 3, 2)
-        self.btn_indicators["Red_3"] = self.make_led(parent, "Red 3", 3, 3)
-        self.btn_indicators["Red_4"] = self.make_led(parent, "Red 4", 3, 4)
+        red_lbl.grid(row=4, column=0, pady=5, padx=5, sticky="w")
+        self.btn_indicators["Red_1"] = self.make_led(parent, "Red 1", 4, 1)
+        self.btn_indicators["Red_2"] = self.make_led(parent, "Red 2", 4, 2)
+        self.btn_indicators["Red_3"] = self.make_led(parent, "Red 3", 4, 3)
+        self.btn_indicators["Red_4"] = self.make_led(parent, "Red 4", 4, 4)
 
-        # ROW 4: D-Pad Vis
+        # ROW 5: Shifter D-Pad Directional Indicators
         dpad_lbl = ttk.Label(parent, text="D-Pad POV:", font=("Arial", 9, "bold"))
-        dpad_lbl.grid(row=4, column=0, pady=10, padx=5, sticky="w")
+        dpad_lbl.grid(row=5, column=0, pady=10, padx=5, sticky="w")
 
         self.dpad_canvas = tk.Canvas(parent, width=80, height=80, bg="#222", highlightthickness=0)
-        self.dpad_canvas.grid(row=4, column=1, columnspan=4, pady=5)
+        self.dpad_canvas.grid(row=5, column=1, columnspan=4, pady=5)
 
         self.dpad_canvas.create_oval(10, 10, 70, 70, fill="#333", outline="#111", width=2)
         self.dpad_canvas.create_oval(30, 30, 50, 50, fill="#2a2a2a", outline="#111")
@@ -302,6 +361,12 @@ class RawWheelConfigApp:
         if pov in self.dpad_dots:
             self.dpad_canvas.itemconfig(self.dpad_dots[pov], fill="red", outline="white")
 
+    def update_rpm_led_visual(self, active_count):
+        for i in range(5):
+            color = self.rpm_colors_on[i] if i < active_count else self.rpm_colors_off[i]
+            if self.rpm_indicators[i].cget("fg") != color:
+                self.rpm_indicators[i].config(fg=color)
+
     def make_led(self, parent, text, r, c, width=8):
         lbl = tk.Label(parent, text=text, bg="#555", fg="white", width=width, relief="ridge")
         lbl.grid(row=r, column=c, padx=2, pady=2)
@@ -309,7 +374,7 @@ class RawWheelConfigApp:
 
     def set_led(self, name, is_on, enabled=True):
         if not enabled:
-            color = "#2c2c2c" # Darkened for disabled state
+            color = "#2c2c2c"
             fg_color = "#555"
         else:
             color = "red" if is_on else "#555"
@@ -335,6 +400,38 @@ class RawWheelConfigApp:
         title_label = ttk.Label(frame, text=label_text, font=("Arial", 9, "bold"))
         title_label.pack()
         return bar, val_label, title_label
+
+    def load_profile(self):
+        path = filedialog.askopenfilename(filetypes=[("JSON Configuration Profiles", "*.json")])
+        if path:
+            self.load_profile_from_path(path)
+
+    def load_profile_from_path(self, path):
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            if "degrees" in data: self.degrees_var.set(data["degrees"])
+            if "autocenter" in data: self.centering_var.set(data["autocenter"])
+            if "combined_pedals" in data: self.combined_pedals_var.set(data["combined_pedals"])
+            self.apply_settings()
+            self.status_label.config(text=f"Loaded Profile: {os.path.basename(path)}", foreground="green")
+        except Exception as e:
+            self.status_label.config(text=f"Profile Error: {e}", foreground="red")
+
+    def save_profile(self):
+        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON Configuration Profiles", "*.json")])
+        if path:
+            try:
+                data = {
+                    "degrees": int(self.degrees_var.get()),
+                    "autocenter": int(self.centering_var.get()),
+                    "combined_pedals": self.combined_pedals_var.get()
+                }
+                with open(path, "w") as f:
+                    json.dump(data, f, indent=4)
+                self.status_label.config(text=f"Saved Profile: {os.path.basename(path)}", foreground="green")
+            except Exception as e:
+                self.status_label.config(text=f"Save Error: {e}", foreground="red")
 
     def trigger_native_mode(self):
         if self.wheel.init_native_mode():
@@ -400,13 +497,13 @@ class RawWheelConfigApp:
                     if len(data) >= 11:
                         w_btn = data[1]
 
-                        # --- G25 Buttons & Paddles ---
+                        # --- G25 State Mapping ---
                         self.set_led("G25_Paddle_L", w_btn & 0x02, is_g25)
                         self.set_led("G25_Paddle_R", w_btn & 0x01, is_g25)
                         self.set_led("G25_A", w_btn & 0x08, is_g25)
                         self.set_led("G25_B", w_btn & 0x04, is_g25)
 
-                        # --- G27 Buttons & Paddles ---
+                        # --- G27 State Mapping ---
                         self.set_led("G27_Paddle_L", w_btn & 0x02, is_g27)
                         self.set_led("G27_Paddle_R", w_btn & 0x01, is_g27)
                         self.set_led("G27_1", w_btn & 0x04, is_g27)
@@ -447,6 +544,22 @@ class RawWheelConfigApp:
                         gas_pct = ((255 - data[5]) / 255.0) * 100
                         brake_pct = ((255 - data[6]) / 255.0) * 100
 
+                        # Calculate and sync RPM Shift Lights dynamically via Gas percentage
+                        if is_g27:
+                            num_leds = 0
+                            if gas_pct > 90: num_leds = 5
+                            elif gas_pct > 70: num_leds = 4
+                            elif gas_pct > 50: num_leds = 3
+                            elif gas_pct > 30: num_leds = 2
+                            elif gas_pct > 10: num_leds = 1
+
+                            if num_leds != self.last_rpm_leds:
+                                self.wheel.set_g27_leds(num_leds)
+                                self.last_rpm_leds = num_leds
+                            self.update_rpm_led_visual(num_leds)
+                        else:
+                            self.update_rpm_led_visual(0)
+
                         if self.combined_pedals_var.get():
                             combined_pct = 50.0 + (gas_pct / 2.0) - (brake_pct / 2.0)
                             self.gas_title.config(text="Combined")
@@ -467,9 +580,10 @@ class RawWheelConfigApp:
                         clutch_pct = ((255 - data[11]) / 255.0) * 100
                         self.clutch_bar['value'] = clutch_pct
                         self.clutch_lbl.config(text=f"{int(clutch_pct)}%")
-
             else:
                 self.status_label.config(text="Status: Wheel NOT detected!", foreground="red")
+                self.update_rpm_led_visual(0)
+                self.last_rpm_leds = -1
 
         except Exception as e:
             self.status_label.config(text=f"Error: {e}", foreground="red")
@@ -477,7 +591,17 @@ class RawWheelConfigApp:
         finally:
             self.root.after(15, self.hardware_loop)
 
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Logitech Custom HID Driver Manager (G25/G27)")
+    parser.add_argument("--degrees", type=int, help="Override steering threshold rotation degrees (40-900)")
+    parser.add_argument("--autocenter", type=int, help="Override centering strength percentage (0-100)")
+    parser.add_argument("--profile", type=str, help="Path to pre-configured JSON configuration profile")
+    parser.add_argument("--launch", type=str, help="Application executable path target or game protocol URI string")
+
+    # Parse known args to eliminate formatting errors when packaging via PyInstaller
+    args, unknown = parser.parse_known_args()
+
     root = tk.Tk()
-    app = RawWheelConfigApp(root, LogitechRawController())
+    app = RawWheelConfigApp(root, LogitechRawController(), cli_args=args)
     root.mainloop()
